@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns="http://www.w3.org/ns/widgets" 
+        xmlns:tizen="http://tizen.org/ns/widgets" 
+        id="http://skycine.tv/SkyCineTizen" 
+        version="2.0.0" 
+        viewmodes="maximized">
+    <tizen:application id="SkyCine001.SkyCineTizen" 
+                       package="SkyCine001" 
+                       required_version="3.0"/>
+    <content src="index.html"/>
+    <feature name="http://tizen.org/feature/screen.size.all"/>
+    <icon src="icon.png"/>
+    <name>SkyCine TV</name>
+    <description>SkyCine Media Player for Samsung Smart TV</description>
+    <author href="http://skycine.tv">SkyLight</author>
+    <tizen:profile name="tv-samsung"/>
+    <tizen:app-control>
+        <tizen:src name="index.html" reload="disable"/>
+        <tizen:operation name="http://tizen.org/appcontrol/operation/view"/>
+    </tizen:app-control>
+    <access origin="*" subdomains="true"/>
+    <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
+    <tizen:privilege name="http://tizen.org/privilege/internet"/>
+    <tizen:privilege name="http://developer.samsung.com/privilege/network.public"/>
+    <tizen:privilege name="http://developer.samsung.com/privilege/avplay"/>
+    <tizen:privilege name="http://tizen.org/privilege/application.launch"/>
+    <tizen:privilege name="http://tizen.org/privilege/filesystem.read"/>
+    <tizen:privilege name="http://tizen.org/privilege/filesystem.write"/>
+    <tizen:setting screen-orientation="landscape" 
+                   hw-accelerated="true" 
+                   context-menu="disable" 
+                   background-support="disable" 
+                   encryption="disable" 
+                   install-location="auto"/>
+    <tizen:metadata key="http://samsung.com/tv/metadata/use.display.area.priority" value="true"/>
+    <tizen:metadata key="http://samsung.com/tv/metadata/prelaunch.screen" value="true"/>
+</widget>
