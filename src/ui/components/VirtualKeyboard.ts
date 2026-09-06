@@ -1,4 +1,4 @@
-// Native Cinema TV Virtual Keyboard Component with Deterministic 2D Grid
+// Native Cinema TV Virtual Keyboard Component with Deterministic 2D Grid for Samsung Tizen TV
 
 import { focusManager } from '../../tizen/focusManager';
 
@@ -15,19 +15,20 @@ export class VirtualKeyboard {
   private container: HTMLElement;
   private options: VirtualKeyboardOptions;
   private currentLang: 'EN' | 'RU';
+  private isCaps: boolean = false;
 
   private layouts = {
     EN: [
-      ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
-      ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p'],
-      ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', '@'],
-      ['z', 'x', 'c', 'v', 'b', 'n', 'm', '.', ':', '/']
+      ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '_'],
+      ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '!', '?'],
+      ['a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', '@', '#', '$'],
+      ['z', 'x', 'c', 'v', 'b', 'n', 'm', '.', ':', '/', '+', '=']
     ],
     RU: [
-      ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
-      ['й', 'ц', 'у', 'к', 'е', 'н', 'г', 'ш', 'щ', 'з', 'х'],
-      ['ф', 'ы', 'в', 'а', 'п', 'р', 'о', 'л', 'д', 'ж', 'э'],
-      ['я', 'ч', 'с', 'м', 'и', 'т', 'ь', 'б', 'ю', '.', '/']
+      ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-', '_'],
+      ['й', 'ц', 'у', 'к', 'е', 'н', 'г', 'ш', 'щ', 'з', 'х', 'ъ'],
+      ['ф', 'ы', 'в', 'а', 'п', 'р', 'о', 'л', 'д', 'ж', 'э', '@'],
+      ['я', 'ч', 'с', 'м', 'и', 'т', 'ь', 'б', 'ю', '.', ':', '/']
     ]
   };
 
@@ -48,6 +49,11 @@ export class VirtualKeyboard {
     this.render();
   }
 
+  public toggleCaps() {
+    this.isCaps = !this.isCaps;
+    this.render();
+  }
+
   public render() {
     const layout = this.layouts[this.currentLang];
     const submitText = this.options.submitLabel || 'Готово';
@@ -58,23 +64,24 @@ export class VirtualKeyboard {
     layout.forEach((row, rowIdx) => {
       html += `<div class="kb-row" data-row="${rowIdx}">`;
       row.forEach((char) => {
+        const displayChar = this.isCaps ? char.toUpperCase() : char.toLowerCase();
         html += `
           <button 
             type="button" 
             class="tv-kb-key" 
             data-tv-focus="true" 
             data-focus-id="kb-${this.currentLang}-${char}" 
-            data-char="${char}"
+            data-char="${displayChar}"
             tabindex="0"
           >
-            ${char}
+            ${displayChar}
           </button>
         `;
       });
       html += `</div>`;
     });
 
-    // Control Action Row (Lang, Space, Backspace, Clear, Submit)
+    // Control Action Row (Lang, Caps, Space, Backspace, Clear, Submit)
     html += `
       <div class="kb-row" style="margin-top: 10px;">
         <button 
@@ -83,7 +90,7 @@ export class VirtualKeyboard {
           data-tv-focus="true" 
           data-focus-id="kb-action-lang" 
           tabindex="0"
-          style="padding: 0 16px; font-size: 16px;"
+          style="padding: 0 14px; font-size: 15px;"
         >
           Язык: ${this.currentLang}
         </button>
@@ -92,9 +99,20 @@ export class VirtualKeyboard {
           type="button" 
           class="tv-kb-key tv-kb-key-wide" 
           data-tv-focus="true" 
+          data-focus-id="kb-action-caps" 
+          tabindex="0"
+          style="padding: 0 14px; font-size: 15px; ${this.isCaps ? 'background: #e5a93c; color: #07090e; font-weight: 900; border: 2px solid #f59e0b;' : ''}"
+        >
+          ${this.isCaps ? '⇧ БОЛЬШИЕ' : '⇧ маленькие'}
+        </button>
+
+        <button 
+          type="button" 
+          class="tv-kb-key tv-kb-key-wide" 
+          data-tv-focus="true" 
           data-focus-id="kb-action-space" 
           tabindex="0"
-          style="flex: 1; max-width: 260px; font-size: 16px;"
+          style="flex: 1; max-width: 200px; font-size: 15px;"
         >
           Пробел
         </button>
@@ -105,7 +123,7 @@ export class VirtualKeyboard {
           data-tv-focus="true" 
           data-focus-id="kb-action-backspace" 
           tabindex="0"
-          style="padding: 0 16px; font-size: 16px;"
+          style="padding: 0 14px; font-size: 15px;"
         >
           Стереть
         </button>
@@ -116,7 +134,7 @@ export class VirtualKeyboard {
           data-tv-focus="true" 
           data-focus-id="kb-action-clear" 
           tabindex="0"
-          style="padding: 0 16px; font-size: 16px;"
+          style="padding: 0 14px; font-size: 15px;"
         >
           Очистить
         </button>
@@ -127,7 +145,7 @@ export class VirtualKeyboard {
           data-tv-focus="true" 
           data-focus-id="kb-action-submit" 
           tabindex="0"
-          style="padding: 0 20px; font-size: 16px; border: 2px solid #e5a93c;"
+          style="padding: 0 18px; font-size: 15px; border: 2px solid #e5a93c;"
         >
           ${submitText}
         </button>
@@ -150,6 +168,14 @@ export class VirtualKeyboard {
       langBtn.addEventListener('click', () => {
         this.setLanguage(this.currentLang === 'EN' ? 'RU' : 'EN');
         focusManager.focus('kb-action-lang');
+      });
+    }
+
+    const capsBtn = this.container.querySelector('[data-focus-id="kb-action-caps"]');
+    if (capsBtn) {
+      capsBtn.addEventListener('click', () => {
+        this.toggleCaps();
+        focusManager.focus('kb-action-caps');
       });
     }
 
