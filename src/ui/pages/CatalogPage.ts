@@ -5,13 +5,21 @@ import { SkyCineApi } from '../../api/client';
 import { createCinemaCard } from '../components/Card';
 import { focusManager } from '../../tizen/focusManager';
 
+export interface CatalogLibrary {
+  id: string;
+  name: string;
+  kind: 'MOVIES' | 'SHOWS' | 'VIDEOS';
+}
+
 export class CatalogPage {
   private container: HTMLElement;
   private type: 'movies' | 'shows';
+  private library: CatalogLibrary | null = null;
   private onDetailCallback: (item: MediaItem) => void;
 
-  constructor(type: 'movies' | 'shows', onDetail: (item: MediaItem) => void) {
+  constructor(type: 'movies' | 'shows', onDetail: (item: MediaItem) => void, library?: CatalogLibrary | null) {
     this.type = type;
+    this.library = library || null;
     this.onDetailCallback = onDetail;
 
     this.container = document.createElement('div');
@@ -27,14 +35,25 @@ export class CatalogPage {
 
   private async loadData() {
     try {
-      const items = this.type === 'movies'
-        ? await SkyCineApi.getMovies()
-        : await SkyCineApi.getShows();
+      let items: MediaItem[];
+      if (this.library) {
+        // Concrete library: server filters by access + libraryId
+        items = this.library.kind === 'SHOWS'
+          ? await SkyCineApi.getShows(this.library.id)
+          : await SkyCineApi.getMovies(this.library.id);
+      } else {
+        items = this.type === 'movies'
+          ? (await SkyCineApi.getMovies()).filter((m: any) => m.type !== 'VIDEO')
+          : await SkyCineApi.getShows();
+      }
 
       const gridMount = this.container.querySelector('#catalog-grid-mount');
       const countEl = this.container.querySelector('#catalog-count');
 
-      if (countEl) countEl.textContent = `${items.length} ${this.type === 'movies' ? 'фильмов' : 'сериалов'}`;
+      const countWord = this.library
+        ? (this.library.kind === 'SHOWS' ? 'сериалов' : this.library.kind === 'VIDEOS' ? 'видео' : 'фильмов')
+        : (this.type === 'movies' ? 'фильмов' : 'сериалов');
+      if (countEl) countEl.textContent = `${items.length} ${countWord}`;
 
       if (gridMount) {
         gridMount.innerHTML = '';
@@ -64,7 +83,7 @@ export class CatalogPage {
   }
 
   public render() {
-    const title = this.type === 'movies' ? 'Фильмы медиатеки' : 'Сериалы';
+    const title = this.library ? this.library.name : (this.type === 'movies' ? 'Фильмы медиатеки' : 'Сериалы');
 
     this.container.innerHTML = `
       <div style="padding: 48px 64px 20px 64px; display: flex; align-items: center; justify-content: space-between;">

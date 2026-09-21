@@ -4,7 +4,7 @@ const STORAGE_KEYS = {
   SERVER_URL: 'skycine_server_url',
   TOKEN: 'skycine_jwt_token',
   USER: 'skycine_user_data',
-  PLAYER_ENGINE: 'skycine_player_engine', // 'avplay' | 'html5'
+  PLAYER_ENGINE: 'skycine_player_engine', // legacy, движок теперь всегда direct-auto
   ASPECT_RATIO: 'skycine_aspect_ratio', // 'FIT' | 'STRETCH' | 'ZOOM'
   BUFFER_MB: 'skycine_buffer_mb',
 };

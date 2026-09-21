@@ -963,3 +963,99 @@ button.tv-kb-key[data-tv-focus="true"]:focus *  {
   -ms-overflow-style: none !important;
   scrollbar-width: none !important;
 }
+
+
+/* ==========================================================================
+   TV PLAYER FACE-LIFT (читаемость с дивана: крупнее время, толще таймлайн,
+   заметный фокус кнопок, аккуратная шапка)
+   ========================================================================== */
+
+.player-title-wrap  {
+  min-width: 0;
+  margin-right: 20px;
+}
+
+
+.player-title  {
+  max-width: 1150px;
+  overflow: hidden;
+  color: #ffffff;
+  font-size: 30px;
+  font-weight: 900;
+  letter-spacing: -0.3px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.8);
+}
+
+
+.player-engine-line  {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  color: #f5c96b;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.8);
+}
+
+
+.player-engine-dot  {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #66e3a0;
+  box-shadow: 0 0 12px rgba(102, 227, 160, 0.9);
+}
+
+
+.player-timeline-bar  {
+  margin-bottom: 8px;
+}
+
+
+.timeline-time  {
+  font-size: 20px;
+  min-width: 86px;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.9);
+}
+
+
+.timeline-remaining  {
+  color: #f5c96b;
+  text-align: right;
+}
+
+
+.timeline-track  {
+  height: 14px;
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+
+
+.timeline-fill  {
+  background: linear-gradient(90deg, #e5a93c, #ffd77d);
+  box-shadow: 0 0 18px rgba(229, 169, 60, 0.9);
+  border-radius: 999px;
+}
+
+
+.player-btn-row .tv-btn  {
+  height: 68px;
+  font-size: 18px;
+  padding: 0 36px;
+}
+
+
+.player-btn-row .tv-btn.tv-focused,
+.player-header .tv-btn.tv-focused  {
+  outline: none;
+  border-color: #fbbf24;
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.55), 0 0 28px rgba(229, 169, 60, 0.55);
+  transform: scale(1.06);
+}

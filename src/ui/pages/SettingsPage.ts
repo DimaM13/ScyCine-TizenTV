@@ -20,13 +20,12 @@ export class SettingsPage {
   }
 
   public onMounted() {
-    focusManager.focus('setting-engine-btn');
+    focusManager.focus('setting-aspect-btn');
   }
 
   public render() {
     const serverUrl = Preferences.getServerUrl();
     const user = Preferences.getUser();
-    const engine = Preferences.getPlayerEngine();
     const aspect = Preferences.getAspectRatio();
     const buffer = Preferences.getBufferMb();
 
@@ -38,23 +37,15 @@ export class SettingsPage {
 
       <div style="padding: 20px 64px 80px 64px; max-width: 960px; display: flex; flex-direction: column; margin-right: 24px;">
         
-        <!-- Player Engine Setting -->
+        <!-- Playback Engine Info (auto: HTML5 seekable, AVPlay fallback) -->
         <div style="background: #0d111a; border: 2px solid rgba(30,41,59,0.8); border-radius: 20px; padding: 24px 32px; display: flex; align-items: center; justify-content: space-between;">
           <div>
             <div style="font-size: 18px; font-weight: 800; color: #ffffff;">Движок воспроизведения</div>
             <div style="font-size: 13px; color: #64748b; margin-top: 4px;">
-              Samsung AVPlay использует аппаратный декодер телевизора (0% нагрузки на процессор)
+              Авто: HTML5 с перемоткой, запасной — аппаратный Samsung AVPlay
             </div>
           </div>
-          <button 
-            type="button" 
-            class="tv-btn tv-btn-secondary" 
-            data-tv-focus="true" 
-            data-focus-id="setting-engine-btn"
-            tabindex="0"
-          >
-            <span id="setting-engine-val">${engine === 'avplay' ? 'Samsung AVPlay (Аппаратный)' : 'HTML5 Video'}</span>
-          </button>
+          <span style="font-size: 14px; font-weight: 800; color: #e5a93c;">Direct · Auto</span>
         </div>
 
         <!-- Default Aspect Ratio Setting -->
@@ -135,17 +126,7 @@ export class SettingsPage {
       </div>
     `;
 
-    // Engine toggle
-    const engineBtn = this.container.querySelector('[data-focus-id="setting-engine-btn"]');
-    if (engineBtn) {
-      engineBtn.addEventListener('click', () => {
-        const cur = Preferences.getPlayerEngine();
-        const next = cur === 'avplay' ? 'html5' : 'avplay';
-        Preferences.setPlayerEngine(next);
-        const val = this.container.querySelector('#setting-engine-val');
-        if (val) val.textContent = next === 'avplay' ? 'Samsung AVPlay (Аппаратный)' : 'HTML5 Video';
-      });
-    }
+    // (Движок выбирается автоматически, настроек нет)
 
     // Aspect toggle
     const aspectBtn = this.container.querySelector('[data-focus-id="setting-aspect-btn"]');

@@ -13,7 +13,7 @@ import { RoomsPage } from './ui/pages/RoomsPage';
 import { SettingsPage } from './ui/pages/SettingsPage';
 import { VideoPlayer } from './ui/player/VideoPlayer';
 import { MediaItem, Episode } from './types';
-import { SkyCineApi } from './api/client';
+import { SkyCineApi, episodeProgress, episodeCompleted } from './api/client';
 import { RemoteLogger } from './logger';
 
 export class App {
@@ -26,6 +26,7 @@ export class App {
   private activePage: any = null;
   private activeDetail: DetailPage | null = null;
   private activePlayer: VideoPlayer | null = null;
+  private librariesCache: Array<{ id: string; name: string; type?: string }> = [];
 
   constructor() {
     this.rootEl = document.getElementById('root') || document.body;
@@ -93,6 +94,21 @@ export class App {
 
     // Default to Home Screen
     this.navigateTo('home');
+
+    // Dynamic libraries (access-filtered by server) into the sidebar
+    this.refreshLibraries();
+  }
+
+  private async refreshLibraries() {
+    try {
+      const libs = await SkyCineApi.getLibraries();
+      if (Array.isArray(libs) && libs.length > 0) {
+        this.librariesCache = libs;
+        if (this.navbar) this.navbar.setLibraries(libs);
+      }
+    } catch (e) {
+      RemoteLogger.warn('APP', `Libraries refresh failed, keeping fallback menu: ${e}`);
+    }
   }
 
   public navigateTo(screen: string) {
@@ -122,6 +138,18 @@ export class App {
       const cat = new CatalogPage('shows', (item) => this.openDetail(item));
       this.activePage = cat;
       this.viewportEl.appendChild(cat.getElement());
+    } else if (screen.startsWith('lib:')) {
+      const libId = screen.slice(4);
+      const lib = this.librariesCache.find((l: any) => String(l.id) === libId);
+      const kind = String((lib as any)?.type || '').toUpperCase();
+      const libView = kind === 'SHOWS'
+        ? { mode: 'shows' as const }
+        : { mode: 'movies' as const };
+      const cat = new CatalogPage(libView.mode, (item) => this.openDetail(item), lib
+        ? { id: String((lib as any).id), name: String((lib as any).name), kind: kind === 'SHOWS' ? 'SHOWS' : kind === 'VIDEOS' ? 'VIDEOS' : 'MOVIES' }
+        : null);
+      this.activePage = cat;
+      this.viewportEl.appendChild(cat.getElement());
     } else if (screen === 'search') {
       const search = new SearchPage((item) => this.openDetail(item));
       this.activePage = search;
@@ -147,8 +175,8 @@ export class App {
       () => {
         this.activeDetail = null;
       },
-      (item, ep, list) => {
-        this.playMedia(item, ep, list);
+      (item, ep, list, startFrom) => {
+        this.playMedia(item, ep, list, null, startFrom !== undefined ? startFrom : null);
       }
     );
 
@@ -156,7 +184,7 @@ export class App {
     this.rootEl.appendChild(detail.getElement());
   }
 
-  public async playMedia(media: MediaItem, episode?: Episode, episodesList?: Episode[]) {
+  public async playMedia(media: MediaItem, episode?: Episode, episodesList?: Episode[], roomId?: string | null, startFromSecs?: number | null) {
     RemoteLogger.info('APP', `playMedia called for "${media.title || media.showTitle}" (type: ${media.type})`);
 
     // If it's a show and no episode was specified, automatically resolve the first episode!
@@ -167,7 +195,7 @@ export class App {
       try {
         const epList = await SkyCineApi.getShowEpisodes(title);
         if (epList && epList.length > 0) {
-          const targetEp = epList.find(e => (e.progressSeconds || 0) > 0 && !e.isCompleted) || epList[0];
+          const targetEp = epList.find(e => episodeProgress(e) > 0 && !episodeCompleted(e)) || epList[0];
           RemoteLogger.info('APP', `Starting episode ${targetEp.seasonNumber}x${targetEp.episodeNumber}: "${targetEp.title}"`);
           this.playMedia(media, targetEp, epList);
           return;
@@ -205,7 +233,9 @@ export class App {
       },
       (nextEp) => {
         this.playMedia(media, nextEp, episodesList);
-      }
+      },
+      roomId || null,
+      startFromSecs !== undefined ? startFromSecs : null
     );
 
     this.activePlayer = player;
@@ -217,10 +247,15 @@ export class App {
     try {
       const rooms = await SkyCineApi.getRooms();
       const targetRoom = rooms.find((r: any) => r.code === roomCode);
-      if (targetRoom && targetRoom.mediaId) {
-        const media = await SkyCineApi.getMediaItem(targetRoom.mediaId);
-        this.playMedia(media);
+      if (!targetRoom) return;
+      // Server rooms carry mediaItemId (not mediaId); YouTube rooms have no local file
+      const mediaId = (targetRoom as any).mediaItemId || (targetRoom as any).mediaId;
+      if (!mediaId) {
+        RemoteLogger.warn('APP', `Room ${roomCode} has no local media (YouTube?) — cannot play on TV`);
+        return;
       }
+      const media = await SkyCineApi.getMediaItem(mediaId);
+      this.playMedia(media, undefined, [], targetRoom.id);
     } catch (e) {
       console.error('[App] Error joining room:', e);
     }

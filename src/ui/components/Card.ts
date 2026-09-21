@@ -16,10 +16,13 @@ export function createCinemaCard(
   card.setAttribute('data-focus-id', `${focusIdPrefix}-${safeId}`);
   card.setAttribute('tabindex', '0');
 
-  const posterUrl = SkyCineApi.getImageUrl(item.posterPath || item.stillPath);
+  const posterUrl = SkyCineApi.getImageUrl(item.posterPath || item.stillPath)
+    // Видео без постеров: сервер сгенерирует кадр из файла и закеширует
+    || (item.id ? SkyCineApi.getThumbnailUrl(item.id) : '');
   const title = item.title || item.displayTitle || item.showTitle || 'Без названия';
   const isShow = item.type === 'SHOW' || Boolean(item.showTitle);
-  const subText = isShow ? 'Сериал' : item.year ? `${item.year}` : 'Фильм';
+  const isVideo = (item as any).type === 'VIDEO';
+  const subText = isShow ? 'Сериал' : isVideo ? 'Видео' : item.year ? `${item.year}` : 'Фильм';
 
   const progressSecs = item.userProgress || item.progressSeconds || 0;
   const totalSecs = item.durationSeconds || 0;

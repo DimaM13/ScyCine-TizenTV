@@ -10,20 +10,45 @@ export interface NavItemDef {
   iconHtml: string;
 }
 
+export interface NavLibraryDef {
+  id: string;
+  name: string;
+  kind: 'MOVIES' | 'SHOWS' | 'VIDEOS';
+}
+
 export class Navbar {
   private container: HTMLElement;
   private currentScreen: string = 'home';
   private onSelectCallback: (screen: string) => void;
   private onLogoutCallback: () => void;
+  private libraries: NavLibraryDef[] = [];
+  private librariesLoaded: boolean = false;
 
-  private items: NavItemDef[] = [
+  private coreHead: NavItemDef[] = [
     { id: 'home', label: 'Главная', iconHtml: Icons.home(26) },
-    { id: 'movies', label: 'Фильмы', iconHtml: Icons.film(26) },
-    { id: 'shows', label: 'Сериалы', iconHtml: Icons.tv(26) },
+  ];
+
+  private coreTail: NavItemDef[] = [
     { id: 'search', label: 'Поиск', iconHtml: Icons.search(26) },
     { id: 'rooms', label: 'Вместе', iconHtml: Icons.users(26) },
     { id: 'settings', label: 'Настройки', iconHtml: Icons.settings(26) }
   ];
+
+  private get items(): NavItemDef[] {
+    // Пока библиотеки не загрузились — классика, чтобы не было пустого меню.
+    // После загрузки — только реальные библиотеки, к которым есть доступ.
+    const middle: NavItemDef[] = this.librariesLoaded
+      ? this.libraries.map((l) => ({
+          id: `lib:${l.id}`,
+          label: l.name,
+          iconHtml: l.kind === 'SHOWS' ? Icons.tv(26) : l.kind === 'VIDEOS' ? Icons.play(26) : Icons.film(26),
+        }))
+      : [
+          { id: 'movies', label: 'Фильмы', iconHtml: Icons.film(26) },
+          { id: 'shows', label: 'Сериалы', iconHtml: Icons.tv(26) },
+        ];
+    return [...this.coreHead, ...middle, ...this.coreTail];
+  }
 
   constructor(
     onSelect: (screen: string) => void,
@@ -48,6 +73,24 @@ export class Navbar {
 
   public getElement(): HTMLElement {
     return this.container;
+  }
+
+  /** Real libraries from server (access-filtered). Re-renders the middle section. */
+  public setLibraries(libs: Array<{ id: string; name: string; type?: string }>) {
+    const norm = (t: any): 'MOVIES' | 'SHOWS' | 'VIDEOS' => {
+      const u = String(t || '').toUpperCase();
+      if (u === 'SHOWS') return 'SHOWS';
+      if (u === 'VIDEOS' || u === 'VIDEO' || u === 'CLIPS') return 'VIDEOS';
+      return 'MOVIES';
+    };
+    this.libraries = (libs || [])
+      .filter((l) => l && l.id && l.name)
+      .map((l) => ({ id: String(l.id), name: String(l.name), kind: norm((l as any).type) }));
+    this.librariesLoaded = true;
+    // Keep focus sane: if current screen vanished, fall back to home highlight
+    const stillThere = this.items.some((i) => i.id === this.currentScreen);
+    if (!stillThere) this.currentScreen = 'home';
+    this.render();
   }
 
   public setActive(screen: string) {

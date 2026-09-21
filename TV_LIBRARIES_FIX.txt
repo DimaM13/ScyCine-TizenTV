@@ -1,0 +1,174 @@
+================================================================================
+SkyCine-TizenTV — ФИКС БИБЛИОТЕК: пустые «Фильмы», видео в куче с фильмами,
+отсутствие обложек у видео. Всё правится ТОЛЬКО в ТВ-проекте, сервер не нужен.
+================================================================================
+
+--------------------------------------------------------------------------------
+ШАГ 0. БЕЗ КОДА: пустая полка «Фильмы» — это доступы, а не баг (проверено)
+--------------------------------------------------------------------------------
+Симптом: сериалы видны, фильмов ноль.
+Причина: сервер отдаёт каждому пользователю только разрешённое
+(user_library_access / user_media_access). Если на ТВ вбит ограниченный
+пользователь (например, ему выданы только серии поITEMно) — /media/movies
+вернёт пусто, и ТВ честно покажет «Медиатека пуста».
+Лечение без кода: веб-клиент → админ → Пользователи → нужный юзер → выдать
+доступ к библиотекам фильмов («Фильмы», «Фильмы 2», «Мультфильмы», ...).
+Проверка: GET /api/media/movies с токеном этого юзера должен вернуть movies[].
+
+Важно для кода ниже: сервер в /media/movies кладёт type IN ('MOVIE','VIDEO')
+так задумано. А постеров у VIDEO в базе НЕТ вообще (сканер их не делает).
+Отсюда два ТВ-фикса: разделить полки и подтянуть обложки через thumbnail.
+
+Контракт серверного эндпоинта обложек (уже есть на сервере, код не нужен):
+  GET /api/media/item/{mediaId}/thumbnail  →  image/jpeg (200)
+  Первый вызов генерирует кадр ffmpeg'ом (~до 8с) и кеширует, дальше мгновенно.
+  Без авторизации (img-тег не умеет Bearer), 404 если файла нет.
+
+--------------------------------------------------------------------------------
+ШАГ 1. src/api/client.ts — добавить getThumbnailUrl
+--------------------------------------------------------------------------------
+Найти метод getStreamUrl (возвращает direct-URL) и ПОСЛЕ него вставить:
+
+  getThumbnailUrl(mediaId: string): string {
+    if (!mediaId) return '';
+    return `${Preferences.getServerUrl()}/api/media/item/${encodeURIComponent(mediaId)}/thumbnail`;
+  },
+
+--------------------------------------------------------------------------------
+ШАГ 2. src/ui/components/Card.ts — фолбэк обложки + подпись «Видео»
+--------------------------------------------------------------------------------
+НАЙТИ (в createCinemaCard):
+  const posterUrl = SkyCineApi.getImageUrl(item.posterPath || item.stillPath);
+  const title = item.title || item.displayTitle || item.showTitle || 'Без названия';
+  const isShow = item.type === 'SHOW' || Boolean(item.showTitle);
+  const subText = isShow ? 'Сериал' : item.year ? `${item.year}` : 'Фильм';
+
+ЗАМЕНИТЬ НА:
+  const posterUrl = SkyCineApi.getImageUrl(item.posterPath || item.stillPath)
+    // Видео без постеров: сервер сгенерирует кадр из файла и закеширует
+    || (item.id ? SkyCineApi.getThumbnailUrl(item.id) : '');
+  const title = item.title || item.displayTitle || item.showTitle || 'Без названия';
+  const isShow = item.type === 'SHOW' || Boolean(item.showTitle);
+  const isVideo = (item as any).type === 'VIDEO';
+  const subText = isShow ? 'Сериал' : isVideo ? 'Видео' : item.year ? `${item.year}` : 'Фильм';
+
+Остальное в файле не трогать. Теперь карточки без постера показывают кадр
+из видео вместо серой заглушки.
+
+--------------------------------------------------------------------------------
+ШАГ 3. src/ui/pages/HomePage.ts — отдельная полка «Видео и клипы»
+--------------------------------------------------------------------------------
+3а. НАЙТИ поля класса:
+  private continueShelf: Carousel;
+  private moviesShelf: Carousel;
+  private showsShelf: Carousel;
+ЗАМЕНИТЬ НА (добавить videosShelf + allVideos):
+  private continueShelf: Carousel;
+  private moviesShelf: Carousel;
+  private videosShelf: Carousel;
+  private showsShelf: Carousel;
+
+3б. В том же файле НАЙТИ объявление allMovies/allShows и добавить allVideos:
+  private featuredItem: MediaItem | null = null;
+  private allMovies: MediaItem[] = [];
+  private allVideos: MediaItem[] = [];
+  private allShows: MediaItem[] = [];
+
+3в. НАЙТИ в конструкторе:
+    this.continueShelf = new Carousel('Продолжить просмотр');
+    this.moviesShelf = new Carousel('Фильмы медиатеки');
+    this.showsShelf = new Carousel('Популярные сериалы');
+
+    this.container.appendChild(this.billboard.getElement());
+    this.container.appendChild(this.continueShelf.getElement());
+    this.container.appendChild(this.moviesShelf.getElement());
+    this.container.appendChild(this.showsShelf.getElement());
+ЗАМЕНИТЬ НА:
+    this.continueShelf = new Carousel('Продолжить просмотр');
+    this.moviesShelf = new Carousel('Фильмы медиатеки');
+    this.videosShelf = new Carousel('Видео и клипы');
+    this.showsShelf = new Carousel('Популярные сериалы');
+
+    this.container.appendChild(this.billboard.getElement());
+    this.container.appendChild(this.continueShelf.getElement());
+    this.container.appendChild(this.moviesShelf.getElement());
+    this.container.appendChild(this.videosShelf.getElement());
+    this.container.appendChild(this.showsShelf.getElement());
+
+3г. НАЙТИ в loadData():
+      const [continueItems, movies, shows] = await Promise.all([
+        SkyCineApi.getContinueWatching().catch(() => []),
+        SkyCineApi.getMovies().catch(() => []),
+        SkyCineApi.getShows().catch(() => [])
+      ]);
+
+      this.allMovies = movies;
+      this.allShows = shows;
+ЗАМЕНИТЬ НА:
+      const [continueItems, moviesRaw, shows] = await Promise.all([
+        SkyCineApi.getContinueWatching().catch(() => []),
+        SkyCineApi.getMovies().catch(() => []),
+        SkyCineApi.getShows().catch(() => [])
+      ]);
+
+      // Сервер кладёт VIDEO в выдачу /media/movies — делим честно:
+      // фильмы отдельно, клипы/видео отдельной полкой
+      const movies = (moviesRaw as MediaItem[]).filter(m => (m as any).type !== 'VIDEO');
+      const videos = (moviesRaw as MediaItem[]).filter(m => (m as any).type === 'VIDEO');
+      this.allMovies = movies;
+      this.allVideos = videos;
+      this.allShows = shows;
+
+3д. НАЙТИ наполнение moviesShelf:
+      this.moviesShelf.setItems(
+        movies,
+        (item) => this.onDetailCallback(item),
+        'movie'
+      );
+
+      this.showsShelf.setItems(
+ЗАМЕНИТЬ НА (вставить videosShelf между ними):
+      this.moviesShelf.setItems(
+        movies,
+        (item) => this.onDetailCallback(item),
+        'movie'
+      );
+
+      this.videosShelf.setItems(
+        videos,
+        (item) => this.onDetailCallback(item),
+        'video'
+      );
+
+      this.showsShelf.setItems(
+
+3е. НАЙТИ селектор начального фокуса:
+          '[data-focus-id="hero-play-btn"], [data-focus-id^="cont-"], [data-focus-id^="movie-"], [data-focus-id^="show-"]'
+ЗАМЕНИТЬ НА:
+          '[data-focus-id="hero-play-btn"], [data-focus-id^="cont-"], [data-focus-id^="movie-"], [data-focus-id^="video-"], [data-focus-id^="show-"]'
+
+Пустая полка сама прячется (Carousel.setItems скрывает контейнер при 0 items).
+
+--------------------------------------------------------------------------------
+ШАГ 4. src/ui/pages/CatalogPage.ts — убрать клипы из каталога фильмов
+--------------------------------------------------------------------------------
+НАЙТИ в loadData():
+      const items = this.type === 'movies'
+        ? await SkyCineApi.getMovies()
+        : await SkyCineApi.getShows();
+ЗАМЕНИТЬ НА:
+      const items = this.type === 'movies'
+        ? (await SkyCineApi.getMovies()).filter((m: any) => m.type !== 'VIDEO')
+        : await SkyCineApi.getShows();
+
+(Клипы при этом остаются доступны с главной через полку «Видео и клипы».)
+
+--------------------------------------------------------------------------------
+ПРОВЕРКА
+--------------------------------------------------------------------------------
+1. npx tsc (должно быть чисто, без ошибок).
+2. npm run build, затем открыть раздел «Фильмы»: только фильмы со счётчиком.
+3. Главная: полка «Видео и клипы» с обложками-кадрами (первая загрузка
+   медленная — сервер режет кадры на лету; повторный заход мгновенный).
+4. Если полка фильмов пуста — см. ШАГ 0 (доступы пользователя на сервере).
+================================================================================

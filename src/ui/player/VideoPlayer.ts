@@ -2,13 +2,15 @@ import { RemoteLogger } from '../../logger';
 // Native Samsung Smart TV Fullscreen Video Player (Direct Hardware AVPlay & Seek HUD)
 
 import { MediaItem, Episode, AudioTrackOption } from '../../types';
-import { SkyCineApi } from '../../api/client';
+import { SkyCineApi, episodeProgress, mediaProgress } from '../../api/client';
 import { avplayService } from '../../tizen/avplayService';
 import { TIZEN_KEYS } from '../../tizen/tizenKeys';
 import { focusManager } from '../../tizen/focusManager';
+import { RoomSyncClient } from '../../tizen/roomSync';
 import { SeekBadge } from '../components/SeekBadge';
 import { Preferences } from '../../storage/preferences';
 import { Icons } from '../icons';
+import { resolveTizenPlayback } from '../../tizen/playbackProfile';
 
 export class VideoPlayer {
   private container: HTMLElement;
@@ -17,6 +19,10 @@ export class VideoPlayer {
   private episodesList: Episode[] = [];
   private onBackCallback: () => void;
   private onPlayNextCallback?: (nextEp: Episode) => void;
+  private roomId: string | null = null;
+  private sync: RoomSyncClient | null = null;
+  // Explicit start position (resume dialog choice). null/undefined = use saved progress.
+  private forceStartSecs: number | null = null;
 
   private isPlaying: boolean = true;
   private currentTime: number = 0;
@@ -25,25 +31,32 @@ export class VideoPlayer {
   private osdTimer: any = null;
   private pendingSeekTime: number | null = null;
   private seekDebounceTimer: any = null;
+  private seekCalmTimer: any = null;
   private isSeekingActive: boolean = false;
   private progressInterval: any = null;
 
   private seekBadge: SeekBadge;
   private audioTracks: AudioTrackOption[] = [];
   private activeEpisodeIndex: number = -1;
+  // streamIndex выбранной аудиодорожки (параметр audioIndex мастера HLS).
+  private hlsAudioIndex: number = 0;
 
   constructor(
     media: MediaItem,
     episode: Episode | undefined,
     episodesList: Episode[],
     onBack: () => void,
-    onPlayNext?: (nextEp: Episode) => void
+    onPlayNext?: (nextEp: Episode) => void,
+    roomId?: string | null,
+    forceStartSecs?: number | null
   ) {
     this.media = media;
     this.episode = episode;
     this.episodesList = episodesList;
     this.onBackCallback = onBack;
     this.onPlayNextCallback = onPlayNext;
+    this.roomId = roomId || null;
+    this.forceStartSecs = forceStartSecs !== undefined ? forceStartSecs : null;
 
     this.duration = episode?.durationSeconds || media.durationSeconds || 0;
 
@@ -100,17 +113,51 @@ export class VideoPlayer {
     this.seekDebounceTimer = setTimeout(() => {
       if (this.pendingSeekTime !== null) {
         const target = this.pendingSeekTime;
-        const delta = target - this.currentTime;
         this.pendingSeekTime = null;
         RemoteLogger.info('PLAYER', `Executing hardware seek to: ${target.toFixed(2)}s`);
         avplayService.seekTo(target);
-
+        // Watch Together: announce aggregated seek once (shouldPlay derived inside)
+        try { this.sync?.sendSeek(target); } catch {}
         // Keep isSeekingActive true for 600ms while hardware buffers new frame
-        setTimeout(() => {
+        clearTimeout(this.seekCalmTimer);
+        this.seekCalmTimer = setTimeout(() => {
           this.isSeekingActive = false;
         }, 600);
       }
     }, 650);
+  }
+
+  // ── Local user actions: hardware + room announce ──
+  private localPlay() {
+    avplayService.play();
+    try { this.sync?.sendPlay(); } catch {}
+  }
+
+  private localPause() {
+    avplayService.pause();
+    try { this.sync?.sendPause(); } catch {}
+  }
+
+  private localToggle() {
+    const willPlay = !this.isPlaying;
+    avplayService.togglePlay();
+    try {
+      if (willPlay) this.sync?.sendPlay();
+      else this.sync?.sendPause();
+    } catch {}
+  }
+
+  // ── Remote-applied actions (from RoomSyncClient): hardware only, never re-emit ──
+  private applySyncSeek(pos: number, shouldPlay: boolean) {
+    avplayService.seekTo(pos, shouldPlay);
+  }
+
+  private applySyncPlay() {
+    avplayService.play();
+  }
+
+  private applySyncPause() {
+    avplayService.pause();
   }
 
   private setupRemoteKeyHandler() {
@@ -125,17 +172,17 @@ export class VideoPlayer {
       // 2. Physical Media Keys (Always work)
       if (keyCode === TIZEN_KEYS.KEY_PLAY) {
         RemoteLogger.info('REMOTE', 'KEY_PLAY pressed');
-        avplayService.play();
+        this.localPlay();
         return true;
       }
       if (keyCode === TIZEN_KEYS.KEY_PAUSE) {
         RemoteLogger.info('REMOTE', 'KEY_PAUSE pressed');
-        avplayService.pause();
+        this.localPause();
         return true;
       }
       if (keyCode === TIZEN_KEYS.KEY_PLAY_PAUSE || keyCode === 32 /* Space */) {
         RemoteLogger.info('REMOTE', 'KEY_PLAY_PAUSE / SPACE pressed');
-        avplayService.togglePlay();
+        this.localToggle();
         return true;
       }
       if (keyCode === TIZEN_KEYS.KEY_REWIND) {
@@ -154,12 +201,12 @@ export class VideoPlayer {
         RemoteLogger.info('REMOTE', 'KEY_ENTER pressed in VideoPlayer');
         const current = focusManager.getCurrentFocusedElement();
         const focusId = current?.getAttribute('data-focus-id');
-        // If focused on back, aspect, audio, or next buttons: let focusManager click it!
-        if (focusId === 'player-back-btn' || focusId === 'player-aspect-btn' || focusId === 'player-audio-btn' || focusId === 'player-next-btn') {
+        // Clickable buttons: let focusManager click them (seek/play/pause as labeled)
+        if (focusId === 'player-back-btn' || focusId === 'player-aspect-btn' || focusId === 'player-audio-btn' || focusId === 'player-next-btn' || focusId === 'player-rewind-btn' || focusId === 'player-forward-btn') {
           return false;
         }
         // Everywhere else (play button, timeline, or watching full screen): Toggle Play/Pause!
-        avplayService.togglePlay();
+        this.localToggle();
         return true;
       }
 
@@ -243,7 +290,7 @@ export class VideoPlayer {
     return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
   }
 
-  private startPlayback() {
+  private async startPlayback() {
     const targetItem = this.episode || this.media;
     const targetId = this.episode?.id || this.media.effectiveId || this.media.id;
     if (!targetId || targetId === 'undefined') {
@@ -251,18 +298,54 @@ export class VideoPlayer {
       this.close();
       return;
     }
-    const streamUrl = SkyCineApi.getStreamUrl(targetId, targetItem.filePath);
 
-    const startPos = (this.episode?.progressSeconds || this.media.userProgress || 0);
+    // Fetch stream info: exact duration, codecs (для лога решения), audio tracks.
+    // Non-fatal: fall back to local metadata if the request fails.
+    let videoCodec = (targetItem as any).videoCodec || this.media.videoCodec || '';
+    let audioCodec = (targetItem as any).audioCodec || this.media.audioCodec || '';
+    try {
+      const info = await SkyCineApi.getStreamInfo(targetId);
+      if (info) {
+        if (info.durationSeconds && info.durationSeconds > 0) {
+          this.duration = info.durationSeconds;
+        }
+        if (info.videoCodec) videoCodec = info.videoCodec;
+        if (info.audioCodec) audioCodec = info.audioCodec;
+        if (Array.isArray(info.audioTracks) && info.audioTracks.length > 0) {
+          this.audioTracks = info.audioTracks.map((t: any, idx: number) => ({
+            index: t.streamIndex !== undefined ? t.streamIndex : idx,
+            id: String(t.streamIndex !== undefined ? t.streamIndex : idx),
+            label: t.title || (t.language ? `Дорожка (${t.language.toUpperCase()})` : `Дорожка ${idx + 1}`),
+            language: t.language || 'ru',
+            channels: t.channels || 2,
+            codec: t.codec || 'AAC',
+            isSelected: Boolean(t.isDefault || idx === 0)
+          }));
+          // Дефолтная дорожка сервера едет в audioIndex мастера HLS.
+          const def = this.audioTracks.find(t => t.isSelected) || this.audioTracks[0];
+          this.hlsAudioIndex = def ? def.index : 0;
+          this.updateAudioBtn();
+        }
+      }
+    } catch (e) {
+      RemoteLogger.warn('PLAYER', `Stream info check failed, using local metadata: ${e}`);
+    }
+
+    // Explicit choice from resume dialog wins over saved progress (0 = restart).
+    // Episode progress may arrive as userProgress (server) — helper normalizes.
+    const savedPos = this.episode
+      ? (episodeProgress(this.episode) || mediaProgress(this.media))
+      : mediaProgress(this.media);
+    const startPos = this.forceStartSecs !== null && this.forceStartSecs !== undefined
+      ? Math.max(0, this.forceStartSecs)
+      : savedPos;
     const safeStart = startPos > 5 && (!this.duration || startPos < this.duration - 20) ? startPos : 0;
-
-    avplayService.setKnownDuration(this.duration);
 
     avplayService.setCallbacks({
       onTimeUpdate: (cur, dur) => {
         if (this.isSeekingActive || this.pendingSeekTime !== null) return;
         this.currentTime = cur;
-        if (dur > 0) this.duration = dur;
+        // Duration only from metadata: HLS firmware reports playlist window, not movie
         this.updateTimeline();
       },
       onStateChange: (playing) => {
@@ -274,16 +357,51 @@ export class VideoPlayer {
         console.error('[VideoPlayer] Playback error:', msg);
         this.seekBadge.show('⚠️ Ошибка', msg);
       },
+      onSeekFailed: (target: number) => {
+        this.seekBadge.show('⚠️ Перемотка не удалась', `${this.formatTime(target)} — проверьте сеть`);
+      },
+      onEngineChange: (engine) => {
+        const label = this.container.querySelector('#player-engine-label');
+        if (label) {
+          label.textContent = engine === 'html5' ? 'HTML5 · перемотка' : 'HLS · AVPlay';
+        }
+      },
       onEnded: () => {
         this.handlePlaybackEnded();
       },
       onTracksChanged: (tracks) => {
-        this.audioTracks = tracks;
-        this.updateAudioBtn();
+        // AVPlay-direct: refresh native track list. HTML5: browser list arrives via loadedmetadata.
+        if (tracks.length > 0) {
+          this.audioTracks = tracks;
+          this.updateAudioBtn();
+        }
       }
     });
 
-    avplayService.open(streamUrl, safeStart);
+    // Tizen = ВСЕГДА HLS: нативный AVPlay открывает master.m3u8 (fMP4).
+    // Решение фиксируем в лог (профиль: server/.../tv-profiles/tizen.profile.ts).
+    const decision = resolveTizenPlayback({
+      videoCodec,
+      audioCodec,
+      filePath: (targetItem as any).filePath,
+    });
+    RemoteLogger.info('PLAYER', `Playback mode: HLS (fMP4). Media decision: ${decision.reasons.join('; ')}`);
+    const hlsUrl = SkyCineApi.getHlsUrl(targetId, { audioIndex: this.hlsAudioIndex, startSecs: safeStart });
+    RemoteLogger.info('PLAYER', `Starting HLS playback at ${safeStart}s (audioIndex=${this.hlsAudioIndex})`);
+    // NOTE: setKnownDuration ПОСЛЕ openHls — внутри openHls() идёт close() (сброс
+    // состояния), а prepareAsync асинхронный, поэтому установка сразу после вызова
+    // успевает до колбэка. В HLS-режиме длительность из железа НЕ перезаписывается.
+    avplayService.openHls({
+      url: hlsUrl,
+      startSecs: safeStart,
+      audioIndex: this.hlsAudioIndex,
+    });
+    avplayService.setKnownDuration(this.duration);
+
+    // Watch Together sync (only when opened from a room)
+    if (this.roomId) {
+      this.startRoomSync(this.roomId);
+    }
 
     // Save playback progress periodically
     this.progressInterval = setInterval(() => {
@@ -295,12 +413,44 @@ export class VideoPlayer {
     this.resetOSDTimer();
   }
 
+  private startRoomSync(roomId: string) {
+    try {
+      const user = Preferences.getUser();
+      let userId = user?.id || '';
+      const username = user?.username || 'Гость ТВ';
+      if (!userId) {
+        userId = localStorage.getItem('skycine_guest_id') || '';
+        if (!userId) {
+          userId = `tizen_${Math.random().toString(36).substring(2, 10)}`;
+          try { localStorage.setItem('skycine_guest_id', userId); } catch {}
+        }
+      }
+      const serverUrl = Preferences.getServerUrl();
+      this.sync = new RoomSyncClient(serverUrl, roomId, userId, username, {
+        getPos: () => avplayService.getCurrentPos(),
+        isPaused: () => !this.isPlaying,
+        isBuffering: () => avplayService.isBufferingNow(),
+        doSeek: (pos, shouldPlay) => this.applySyncSeek(pos, shouldPlay),
+        doPlay: () => this.applySyncPlay(),
+        doPause: () => this.applySyncPause(),
+        showBadge: (title, sub) => this.seekBadge.show(title, sub),
+      }, Preferences.getToken());
+      RemoteLogger.info('PLAYER', `Room sync joined: ${roomId} as ${username}`);
+    } catch (e: any) {
+      RemoteLogger.error('PLAYER', `Room sync failed, continuing solo: ${e?.message || e}`);
+      this.sync = null;
+    }
+  }
+
   private updateTimelineWithTime(time: number) {
     const curEl = this.container.querySelector('#player-current-time');
     if (curEl) curEl.textContent = this.formatTime(time);
 
+    // Справа — остаток цифрами (сколько осталось до конца), без надписей
     const durEl = this.container.querySelector('#player-duration-time');
-    if (durEl) durEl.textContent = this.formatTime(this.duration);
+    if (durEl) {
+      durEl.textContent = this.duration > 0 ? `-${this.formatTime(Math.max(0, this.duration - time))}` : '--:--';
+    }
 
     const fillEl = this.container.querySelector('#player-progress-fill') as HTMLElement;
     if (fillEl && this.duration > 0) {
@@ -354,10 +504,23 @@ export class VideoPlayer {
     if (targetId && this.currentTime > 5 && this.duration > 0) {
       SkyCineApi.updateProgress(targetId, this.currentTime, this.duration).catch(() => {});
     }
+    // Гасим HLS-сессию сервера (client=tizen внутри endHlsSession).
+    // Fire-and-forget: плеер уже закрывается, idle-свипер — страховка.
+    if (targetId) {
+      SkyCineApi.endHlsSession(targetId, this.hlsAudioIndex).catch(() => {});
+    }
 
     clearTimeout(this.osdTimer);
+    clearTimeout(this.seekDebounceTimer);
+    clearTimeout(this.seekCalmTimer);
     clearInterval(this.progressInterval);
+    this.pendingSeekTime = null;
+    this.isSeekingActive = false;
     focusManager.customKeyHandler = null;
+
+    // Leave Watch Together room (stops heartbeats + socket)
+    try { this.sync?.leave(); } catch {}
+    this.sync = null;
 
     avplayService.close();
 
@@ -397,11 +560,9 @@ export class VideoPlayer {
               ${Icons.arrowLeft(20, '#ffffff')}
               <span>Назад</span>
             </button>
-            <div>
-              <div style="font-size: 22px; font-weight: 900; color: #ffffff;">${title}</div>
-              <div style="font-size: 13px; font-weight: 700; color: #e5a93c; margin-top: 4px;">
-                Samsung Hardware AVPlay Engine &bull; Прямое воспроизведение
-              </div>
+            <div class="player-title-wrap">
+              <div class="player-title">${title}</div>
+              <div class="player-engine-line"><span class="player-engine-dot"></span><span id="player-engine-label">HLS · AVPlay</span></div>
             </div>
           </div>
 
@@ -436,10 +597,10 @@ export class VideoPlayer {
           <!-- Timeline Slider -->
           <div class="player-timeline-bar">
             <span class="timeline-time" id="player-current-time">00:00</span>
-            <div class="timeline-track">
+            <div class="timeline-track" aria-label="Ход воспроизведения">
               <div class="timeline-fill" id="player-progress-fill"></div>
             </div>
-            <span class="timeline-time" id="player-duration-time" style="color: #94a3b8;">${this.formatTime(this.duration)}</span>
+            <span class="timeline-time timeline-remaining" id="player-duration-time">--:--</span>
           </div>
 
           <!-- Buttons Row -->
@@ -506,7 +667,7 @@ export class VideoPlayer {
     const playBtn = this.container.querySelector('[data-focus-id="player-play-btn"]');
     if (playBtn) {
       playBtn.addEventListener('click', () => {
-        avplayService.togglePlay();
+        this.localToggle();
         this.resetOSDTimer();
       });
     }
@@ -514,9 +675,8 @@ export class VideoPlayer {
     const rewindBtn = this.container.querySelector('[data-focus-id="player-rewind-btn"]');
     if (rewindBtn) {
       rewindBtn.addEventListener('click', () => {
-        const cur = avplayService.getCurrentPos();
-        avplayService.seekRelative(-10);
-        this.seekBadge.show('⏪ -10 сек', `${this.formatTime(cur - 10)} / ${this.formatTime(this.duration)}`);
+        // Single aggregated seek path (same as remote arrows)
+        this.handleSeekStep(-10);
         this.resetOSDTimer();
       });
     }
@@ -524,9 +684,8 @@ export class VideoPlayer {
     const forwardBtn = this.container.querySelector('[data-focus-id="player-forward-btn"]');
     if (forwardBtn) {
       forwardBtn.addEventListener('click', () => {
-        const cur = avplayService.getCurrentPos();
-        avplayService.seekRelative(10);
-        this.seekBadge.show('⏩ +10 сек', `${this.formatTime(cur + 10)} / ${this.formatTime(this.duration)}`);
+        // Single aggregated seek path (same as remote arrows)
+        this.handleSeekStep(10);
         this.resetOSDTimer();
       });
     }
@@ -559,12 +718,22 @@ export class VideoPlayer {
     if (audioBtn) {
       audioBtn.addEventListener('click', () => {
         if (this.audioTracks.length > 1) {
-          // Cycle through audio tracks
           const curTrackIdx = this.audioTracks.findIndex(t => t.isSelected);
           const nextIdx = (curTrackIdx + 1) % this.audioTracks.length;
-          avplayService.selectAudioTrack(this.audioTracks[nextIdx]);
+          const next = this.audioTracks[nextIdx];
+          // HLS: смена дорожки = переоткрытие мастера с новым audioIndex
+          // (в single-rendition плейлисте setSelectTrack нечего выбирать).
+          // Старую сессию гасим точечно, иначе висит до idle-таймаута.
+          const oldIdx = this.hlsAudioIndex;
+          this.hlsAudioIndex = next.index;
+          const targetId = this.episode?.id || this.media.effectiveId || this.media.id;
+          if (oldIdx !== next.index) {
+            SkyCineApi.endHlsSession(targetId, oldIdx).catch(() => {});
+          }
+          const url = SkyCineApi.getHlsUrl(targetId, { audioIndex: this.hlsAudioIndex });
+          avplayService.reopenHls(url, this.currentTime, this.isPlaying);
           this.audioTracks.forEach((t, i) => t.isSelected = i === nextIdx);
-          this.seekBadge.show('🔊 Аудиодорожка', this.audioTracks[nextIdx].label);
+          this.seekBadge.show('🔊 Аудиодорожка', `${next.label} (HLS)`);
           this.resetOSDTimer();
         }
       });

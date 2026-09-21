@@ -11,6 +11,7 @@ export class HomePage {
   private billboard: Billboard;
   private continueShelf: Carousel;
   private moviesShelf: Carousel;
+  private videosShelf: Carousel;
   private showsShelf: Carousel;
 
   private onPlayCallback: (item: MediaItem) => void;
@@ -18,6 +19,7 @@ export class HomePage {
 
   private featuredItem: MediaItem | null = null;
   private allMovies: MediaItem[] = [];
+  private allVideos: MediaItem[] = [];
   private allShows: MediaItem[] = [];
 
   constructor(
@@ -37,11 +39,13 @@ export class HomePage {
 
     this.continueShelf = new Carousel('Продолжить просмотр');
     this.moviesShelf = new Carousel('Фильмы медиатеки');
+    this.videosShelf = new Carousel('Видео и клипы');
     this.showsShelf = new Carousel('Популярные сериалы');
 
     this.container.appendChild(this.billboard.getElement());
     this.container.appendChild(this.continueShelf.getElement());
     this.container.appendChild(this.moviesShelf.getElement());
+    this.container.appendChild(this.videosShelf.getElement());
     this.container.appendChild(this.showsShelf.getElement());
   }
 
@@ -51,13 +55,18 @@ export class HomePage {
 
   public async loadData() {
     try {
-      const [continueItems, movies, shows] = await Promise.all([
+      const [continueItems, moviesRaw, shows] = await Promise.all([
         SkyCineApi.getContinueWatching().catch(() => []),
         SkyCineApi.getMovies().catch(() => []),
         SkyCineApi.getShows().catch(() => [])
       ]);
 
+      // Сервер кладёт VIDEO в выдачу /media/movies — делим честно:
+      // фильмы отдельно, клипы/видео отдельной полкой
+      const movies = (moviesRaw as MediaItem[]).filter(m => (m as any).type !== 'VIDEO');
+      const videos = (moviesRaw as MediaItem[]).filter(m => (m as any).type === 'VIDEO');
       this.allMovies = movies;
+      this.allVideos = videos;
       this.allShows = shows;
 
       // 1. Set Featured Item for Billboard
@@ -90,6 +99,12 @@ export class HomePage {
         'movie'
       );
 
+      this.videosShelf.setItems(
+        videos,
+        (item) => this.onDetailCallback(item),
+        'video'
+      );
+
       this.showsShelf.setItems(
         shows,
         (item) => this.onDetailCallback(item),
@@ -99,7 +114,7 @@ export class HomePage {
       // 3. Initial Focus
       setTimeout(() => {
         const firstFocus = this.container.querySelector(
-          '[data-focus-id="hero-play-btn"], [data-focus-id^="cont-"], [data-focus-id^="movie-"], [data-focus-id^="show-"]'
+          '[data-focus-id="hero-play-btn"], [data-focus-id^="cont-"], [data-focus-id^="movie-"], [data-focus-id^="video-"], [data-focus-id^="show-"]'
         ) as HTMLElement;
         if (firstFocus) {
           focusManager.focus(firstFocus);
