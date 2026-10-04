@@ -68,7 +68,7 @@ export class RoomSyncClient {
           roomId: this.roomId,
           userId: this.userId,
           username: this.username,
-          streamMode: 'hls',
+          streamMode: 'direct',
           platform: 'tizen',
         });
         this.ntpPing();
@@ -198,7 +198,7 @@ export class RoomSyncClient {
           s.emit('room:member_status', {
             roomId: this.roomId,
             currentPosition: this.safePos(),
-            streamMode: 'hls',
+            streamMode: 'direct',
             isBuffering: buffering,
             isPlaying: !this.cb.isPaused(),
             platform: 'tizen',

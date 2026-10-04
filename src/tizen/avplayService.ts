@@ -52,11 +52,6 @@ export class AVPlayService {
   private directTriedHtml5: boolean = false;
   private directTriedAvplay: boolean = false;
   private avplayAutoPlay: boolean = true;
-  // HLS-режим (единственный прод-путь): AVPlay открывает master.m3u8 сервера.
-  // Длительность берём только из knownDuration (метаданные), прошивка для HLS
-  // отдаёт окно плейлиста, а не фильм. Перемотка — штатный seekTo, reopen не нужен.
-  private isHlsMode: boolean = false;
-  private hlsAudioIndex: number = 0;
 
   public isTizenAVPlay(): boolean {
     // AVPlay доступен как движок (выбор HTML5/AVPlay решает openDirect).
@@ -106,53 +101,8 @@ export class AVPlayService {
   }
 
   public open(url: string, startPositionSeconds: number = 0) {
-    // m3u8 всегда идёт нативным HLS-путём; остальное — легаси direct (не используется продом).
-    if (url.includes('m3u8')) {
-      this.openHls({ url, startSecs: startPositionSeconds });
-      return;
-    }
+    // Совместимость: прямой URL всегда пробуем сначала через HTML5
     this.openDirect({ url, startSecs: startPositionSeconds });
-  }
-
-  /**
-   * ЕДИНСТВЕННЫЙ прод-путь Tizen: нативный AVPlay HLS.
-   * AVPlay.open(master.m3u8) -> prepareAsync -> play -> seekTo(resume).
-   * fMP4-сегменты поддерживаются с Tizen 3.0, seek/duration штатные для HLS.
-   */
-  public openHls(opts: {
-    url: string; startSecs?: number; audioIndex?: number;
-  }) {
-    const startSecs = Math.max(0, opts.startSecs || 0);
-    this.directUrl = opts.url;
-    this.directStartSecs = startSecs;
-    this.directTriedHtml5 = false;
-    this.directTriedAvplay = false;
-    this.isHlsMode = true;
-    this.hlsAudioIndex = opts.audioIndex !== undefined && opts.audioIndex !== null ? opts.audioIndex : 0;
-    RemoteLogger.info('AVPLAY', `openHls at ${startSecs}s (audioIndex=${this.hlsAudioIndex})`);
-    this.close();
-    // close() сбрасывает флаги — восстанавливаем HLS-режим после него.
-    this.isHlsMode = true;
-    this.hlsAudioIndex = opts.audioIndex !== undefined && opts.audioIndex !== null ? opts.audioIndex : 0;
-    this.directUrl = opts.url;
-    this.directStartSecs = startSecs;
-    this.openAvplayHls(opts.url, startSecs, true);
-  }
-
-  /**
-   * Переоткрытие HLS (смена аудиодорожки: сервер собирает плейлист с другим
-   * audioIndex). Позиция и play/pause сохраняются.
-   */
-  public reopenHls(url: string, posSecs: number, autoPlay: boolean = true) {
-    const pos = Math.max(0, posSecs);
-    RemoteLogger.info('AVPLAY', `reopenHls at ${pos}s (audio switch)`);
-    const audioIndex = this.hlsAudioIndex;
-    this.close();
-    this.isHlsMode = true;
-    this.hlsAudioIndex = audioIndex;
-    this.directUrl = url;
-    this.directStartSecs = pos;
-    this.openAvplayHls(url, pos, autoPlay);
   }
 
   /**
@@ -170,7 +120,6 @@ export class AVPlayService {
     this.directStartSecs = startSecs;
     this.directTriedHtml5 = false;
     this.directTriedAvplay = false;
-    this.isHlsMode = false;
     RemoteLogger.info('AVPLAY', `openDirect at ${startSecs}s (v=${opts.videoCodec || '?'}, a=${opts.audioCodec || '?'})`);
     this.close();
 
@@ -345,50 +294,6 @@ export class AVPlayService {
     this.html5Video = null;
   }
 
-  // --- NATIVE SAMSUNG TIZEN AVPLAY: HLS (прод-путь) ---
-  private openAvplayHls(url: string, startSecs: number, autoPlay: boolean = true) {
-    const avplay = (window as any).webapis?.avplay;
-    if (!avplay) {
-      RemoteLogger.error('AVPLAY', 'webapis.avplay not available on this device');
-      this.callbacks.onError?.('Samsung AVPlay недоступен на этом устройстве');
-      return;
-    }
-    this.activeEngine = 'avplay';
-    this.directTriedAvplay = true;
-    this.callbacks.onEngineChange?.('avplay');
-
-    this.avPlayerContainer = document.getElementById('av-player-container');
-    if (this.avPlayerContainer) {
-      this.avPlayerContainer.style.display = 'block';
-    }
-
-    try {
-      RemoteLogger.info('AVPLAY', 'Calling avplay.open(hls m3u8)...');
-      avplay.open(url);
-
-      try {
-        avplay.setDisplayRect(0, 0, 1920, 1080);
-      } catch (e: any) {
-        RemoteLogger.warn('AVPLAY', `setDisplayRect warning: ${e.message}`);
-      }
-
-      this.registerAvplayListener();
-      this.initVisibilityHandling();
-
-      // Resume: сервер уже подложил EXT-X-START через startTime в URL мастера,
-      // seekTo после prepare дублирует для точности (HLS-seek штатный, reopen не нужен).
-      this.directStartSeekSecs = startSecs > 5 ? startSecs : 0;
-      this.avplayAutoPlay = autoPlay;
-      this.currentPosSecs = Math.max(0, startSecs);
-      this.lastHardwarePosSecs = this.currentPosSecs;
-      this.prepareAvplay();
-
-    } catch (e: any) {
-      RemoteLogger.error('AVPLAY', `Exception in openHls(): ${e.message}`);
-      this.callbacks.onError?.(`Сбой инициализации Samsung AVPlay HLS: ${e.message}`);
-    }
-  }
-
   // --- NATIVE SAMSUNG TIZEN AVPLAY IMPLEMENTATION (direct progressive) ---
   private openAvplayDirect(url: string, startSecs: number, autoPlay: boolean = true) {
     const avplay = (window as any).webapis?.avplay;
@@ -531,13 +436,9 @@ export class AVPlayService {
 
           try {
             const rawDur = avplay.getDuration();
-            // HLS: прошивка отдаёт окно плейлиста, а не фильм — длительность только
-            // из knownDuration (метаданные сервера). Direct: как раньше.
-            if (!this.isHlsMode && rawDur && rawDur > 0) {
+            if (rawDur && rawDur > 0) {
               this.durationSecs = rawDur / 1000.0;
               RemoteLogger.info('AVPLAY', `Stream duration: ${this.durationSecs}s`);
-            } else if (this.isHlsMode) {
-              RemoteLogger.info('AVPLAY', `HLS duration kept from metadata: ${this.durationSecs}s (hw reports window)`);
             }
           } catch (e) {}
           // Display mode in READY state
@@ -1254,8 +1155,6 @@ export class AVPlayService {
     this.directTriedHtml5 = false;
     this.directTriedAvplay = false;
     this.avplayAutoPlay = true;
-    this.isHlsMode = false;
-    this.hlsAudioIndex = 0;
 
     if (this.isTizenAVPlay()) {
       try {

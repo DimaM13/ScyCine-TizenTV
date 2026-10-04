@@ -33,30 +33,7 @@ export const getApiClient = () => {
 };
 
 export const SkyCineApi = {
-  // HLS — ЕДИНСТВЕННЫЙ движок Tizen-клиента: нативный AVPlay открывает master.m3u8 (fMP4).
-  // isApple=0 => сервер отдаёт fMP4-контейнер (поддерживается с Tizen 3.0).
-  // quality=original => видео direct-copy, звук либо copy, либо AAC-транскод внутри сегментов.
-  // audioIndex — streamIndex выбранной аудиодорожки из /stream/:id/info.
-  // startSecs — серверный prewarm (плейлист содержит EXT-X-START, AVPlay seekTo дублирует).
-  getHlsUrl(mediaId: string, opts?: { audioIndex?: number; startSecs?: number; quality?: string }): string {
-    const token = Preferences.getToken();
-    const q = opts?.quality || 'original';
-    const a = opts?.audioIndex !== undefined && opts.audioIndex !== null ? opts.audioIndex : 0;
-    const params = [
-      `quality=${encodeURIComponent(q)}`,
-      `audioIndex=${encodeURIComponent(String(a))}`,
-      'isApple=0',
-      'client=tizen',
-    ];
-    if (opts?.startSecs && opts.startSecs > 1) {
-      params.push(`startTime=${Math.floor(opts.startSecs)}`);
-    }
-    params.push(`token=${encodeURIComponent(token || '')}`);
-    return `${Preferences.getServerUrl()}/api/stream/${encodeURIComponent(mediaId)}/master.m3u8?${params.join('&')}`;
-  },
-
-  // Helpers: прямой прогрессивный поток (DEPRECATED: Tizen полностью на HLS,
-  // оставлено для совместимости, прод-плеер не использует).
+  // Helpers: прямой прогрессивный поток (единственный движок).
   // Суффикс /video.{ext} помогает прошивке определить контейнер.
   getStreamUrl(mediaId: string, filePath?: string): string {
     const token = Preferences.getToken();
@@ -106,21 +83,6 @@ export const SkyCineApi = {
     const client = getApiClient();
     const res = await client.get(`/stream/${encodeURIComponent(mediaId)}/info`);
     return res.data;
-  },
-
-  // Завершение HLS-сессии сервера. client обязателен: без маркера _tvtizen
-  // sessionId не совпадёт с живой ТВ-сессией и kill промахнётся.
-  async endHlsSession(mediaId: string, audioIndex: number): Promise<void> {
-    try {
-      const client = getApiClient();
-      await client.post('/stream/hls/session/end', {
-        mediaId,
-        quality: 'original',
-        audioIndex,
-        isApple: false,
-        client: 'tizen',
-      });
-    } catch {}
   },
 
   // Libraries & Content

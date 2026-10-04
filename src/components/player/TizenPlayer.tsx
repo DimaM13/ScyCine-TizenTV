@@ -55,8 +55,7 @@ export const TizenPlayer: React.FC<TizenPlayerProps> = ({
   }, [activeEpisode, episodesList]);
 
   // NOTE: dead React branch (prod uses vanilla ui/player). Kept compiling only.
-  // Tizen полностью на HLS — как и прод-путь.
-  const streamUrl = SkyCineApi.getHlsUrl(activeEpisode?.id || media.effectiveId || media.id);
+  const streamUrl = SkyCineApi.getStreamUrl(activeEpisode?.id || media.effectiveId || media.id);
 
   // Safe initial position: don't resume if already completed (>duration - 15)
   const rawInitialPos = activeEpisode?.progressSeconds || media.userProgress || 0;

@@ -10,7 +10,6 @@ import { RoomSyncClient } from '../../tizen/roomSync';
 import { SeekBadge } from '../components/SeekBadge';
 import { Preferences } from '../../storage/preferences';
 import { Icons } from '../icons';
-import { resolveTizenPlayback } from '../../tizen/playbackProfile';
 
 export class VideoPlayer {
   private container: HTMLElement;
@@ -38,8 +37,6 @@ export class VideoPlayer {
   private seekBadge: SeekBadge;
   private audioTracks: AudioTrackOption[] = [];
   private activeEpisodeIndex: number = -1;
-  // streamIndex выбранной аудиодорожки (параметр audioIndex мастера HLS).
-  private hlsAudioIndex: number = 0;
 
   constructor(
     media: MediaItem,
@@ -299,7 +296,7 @@ export class VideoPlayer {
       return;
     }
 
-    // Fetch stream info: exact duration, codecs (для лога решения), audio tracks.
+    // Fetch stream info: exact duration, codecs (engine routing), audio tracks.
     // Non-fatal: fall back to local metadata if the request fails.
     let videoCodec = (targetItem as any).videoCodec || this.media.videoCodec || '';
     let audioCodec = (targetItem as any).audioCodec || this.media.audioCodec || '';
@@ -309,8 +306,6 @@ export class VideoPlayer {
         if (info.durationSeconds && info.durationSeconds > 0) {
           this.duration = info.durationSeconds;
         }
-        if (info.videoCodec) videoCodec = info.videoCodec;
-        if (info.audioCodec) audioCodec = info.audioCodec;
         if (Array.isArray(info.audioTracks) && info.audioTracks.length > 0) {
           this.audioTracks = info.audioTracks.map((t: any, idx: number) => ({
             index: t.streamIndex !== undefined ? t.streamIndex : idx,
@@ -321,9 +316,6 @@ export class VideoPlayer {
             codec: t.codec || 'AAC',
             isSelected: Boolean(t.isDefault || idx === 0)
           }));
-          // Дефолтная дорожка сервера едет в audioIndex мастера HLS.
-          const def = this.audioTracks.find(t => t.isSelected) || this.audioTracks[0];
-          this.hlsAudioIndex = def ? def.index : 0;
           this.updateAudioBtn();
         }
       }
@@ -363,7 +355,7 @@ export class VideoPlayer {
       onEngineChange: (engine) => {
         const label = this.container.querySelector('#player-engine-label');
         if (label) {
-          label.textContent = engine === 'html5' ? 'HTML5 · перемотка' : 'HLS · AVPlay';
+          label.textContent = engine === 'html5' ? 'HTML5 · перемотка' : 'AVPlay · железо';
         }
       },
       onEnded: () => {
@@ -378,24 +370,17 @@ export class VideoPlayer {
       }
     });
 
-    // Tizen = ВСЕГДА HLS: нативный AVPlay открывает master.m3u8 (fMP4).
-    // Решение фиксируем в лог (профиль: server/.../tv-profiles/tizen.profile.ts).
-    const decision = resolveTizenPlayback({
+    // Direct progressive stream; service picks HTML5 (seekable) or AVPlay (fallback).
+    const streamUrl = SkyCineApi.getStreamUrl(targetId, (targetItem as any).filePath);
+    RemoteLogger.info('PLAYER', `Starting direct playback at ${safeStart}s: ${streamUrl}`);
+    avplayService.openDirect({
+      url: streamUrl,
+      startSecs: safeStart,
       videoCodec,
       audioCodec,
       filePath: (targetItem as any).filePath,
     });
-    RemoteLogger.info('PLAYER', `Playback mode: HLS (fMP4). Media decision: ${decision.reasons.join('; ')}`);
-    const hlsUrl = SkyCineApi.getHlsUrl(targetId, { audioIndex: this.hlsAudioIndex, startSecs: safeStart });
-    RemoteLogger.info('PLAYER', `Starting HLS playback at ${safeStart}s (audioIndex=${this.hlsAudioIndex})`);
-    // NOTE: setKnownDuration ПОСЛЕ openHls — внутри openHls() идёт close() (сброс
-    // состояния), а prepareAsync асинхронный, поэтому установка сразу после вызова
-    // успевает до колбэка. В HLS-режиме длительность из железа НЕ перезаписывается.
-    avplayService.openHls({
-      url: hlsUrl,
-      startSecs: safeStart,
-      audioIndex: this.hlsAudioIndex,
-    });
+    // NOTE: setKnownDuration AFTER open() — open() → close() resets service state
     avplayService.setKnownDuration(this.duration);
 
     // Watch Together sync (only when opened from a room)
@@ -504,11 +489,6 @@ export class VideoPlayer {
     if (targetId && this.currentTime > 5 && this.duration > 0) {
       SkyCineApi.updateProgress(targetId, this.currentTime, this.duration).catch(() => {});
     }
-    // Гасим HLS-сессию сервера (client=tizen внутри endHlsSession).
-    // Fire-and-forget: плеер уже закрывается, idle-свипер — страховка.
-    if (targetId) {
-      SkyCineApi.endHlsSession(targetId, this.hlsAudioIndex).catch(() => {});
-    }
 
     clearTimeout(this.osdTimer);
     clearTimeout(this.seekDebounceTimer);
@@ -562,7 +542,7 @@ export class VideoPlayer {
             </button>
             <div class="player-title-wrap">
               <div class="player-title">${title}</div>
-              <div class="player-engine-line"><span class="player-engine-dot"></span><span id="player-engine-label">HLS · AVPlay</span></div>
+              <div class="player-engine-line"><span class="player-engine-dot"></span><span id="player-engine-label">Прямой поток</span></div>
             </div>
           </div>
 
@@ -721,19 +701,9 @@ export class VideoPlayer {
           const curTrackIdx = this.audioTracks.findIndex(t => t.isSelected);
           const nextIdx = (curTrackIdx + 1) % this.audioTracks.length;
           const next = this.audioTracks[nextIdx];
-          // HLS: смена дорожки = переоткрытие мастера с новым audioIndex
-          // (в single-rendition плейлисте setSelectTrack нечего выбирать).
-          // Старую сессию гасим точечно, иначе висит до idle-таймаута.
-          const oldIdx = this.hlsAudioIndex;
-          this.hlsAudioIndex = next.index;
-          const targetId = this.episode?.id || this.media.effectiveId || this.media.id;
-          if (oldIdx !== next.index) {
-            SkyCineApi.endHlsSession(targetId, oldIdx).catch(() => {});
-          }
-          const url = SkyCineApi.getHlsUrl(targetId, { audioIndex: this.hlsAudioIndex });
-          avplayService.reopenHls(url, this.currentTime, this.isPlaying);
+          avplayService.selectAudioTrack(next);
           this.audioTracks.forEach((t, i) => t.isSelected = i === nextIdx);
-          this.seekBadge.show('🔊 Аудиодорожка', `${next.label} (HLS)`);
+          this.seekBadge.show('🔊 Аудиодорожка', next.label);
           this.resetOSDTimer();
         }
       });
