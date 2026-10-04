@@ -221,11 +221,16 @@ export class VideoPlayer {
         if (focusId === 'player-back-btn' || focusId === 'player-aspect-btn' || focusId === 'player-audio-btn' || focusId === 'player-next-btn' || focusId === 'player-rewind-btn' || focusId === 'player-forward-btn') {
           return false;
         }
-        // Середина везде иначе: открыть меню плеера (OSD) и встать на паузу.
-        // Продолжить — клавиши PLAY / PLAY-PAUSE либо кнопка «Воспроизведение».
+        // Середина везде иначе: открыть меню плеера (OSD) и переключить
+        // play/pause по состоянию (пауза ставится, с паузы — снимается).
+        // Отдельные клавиши PLAY / PLAY-PAUSE работают как раньше.
         this.setOSDVisible(true);
         this.resetOSDTimer();
-        this.localPause();
+        if (this.isPlaying) {
+          this.localPause();
+        } else {
+          this.localPlay();
+        }
         return true;
       }
 
