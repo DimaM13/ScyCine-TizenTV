@@ -328,7 +328,7 @@ export class AVPlayService {
       this.initVisibilityHandling();
 
       // 4. Prepare: resume via explicit seekTo after prepare (URL has no startTime)
-      this.directStartSeekSecs = startSecs > 5 ? startSecs : 0;
+      this.directStartSeekSecs = startSecs > 2 ? startSecs : 0;
       this.avplayAutoPlay = autoPlay;
       this.currentPosSecs = Math.max(0, startSecs);
       this.lastHardwarePosSecs = this.currentPosSecs;
@@ -672,6 +672,16 @@ export class AVPlayService {
       }
       this.isSeeking = false;
       this.isHardwareBusy = false;
+      // Не теряем нажатие play/pause, пришедшее во время зависшего seek
+      // (раньше интент молча умирал здесь — пауза "не работала").
+      // Флаги уже сброшены — повторяем интент напрямую через методы движка.
+      if (this.pendingPlayState !== null) {
+        const want = this.pendingPlayState;
+        this.pendingPlayState = null;
+        RemoteLogger.info('AVPLAY', `Applying deferred play intent after safety timeout: ${want ? 'PLAY' : 'PAUSE'}`);
+        if (want) this.play();
+        else this.pause();
+      }
     }, 4000);
 
     // A Samsung TV exposes AVPlay even while the HTML5 element is active.
@@ -979,6 +989,10 @@ export class AVPlayService {
     this.jumpWatch = null;
     this.isSeeking = false;
     this.isHardwareBusy = false;
+    // Отложенный интент гасим: вызвавший код после abort исполняет свежий
+    // интент сразу (fall-through в play/pause/toggle), а висящий pending
+    // потом ложно сработал бы в чужом seek (пауза из ниоткуда).
+    this.pendingPlayState = null;
     this.currentPosSecs = this.lastHardwarePosSecs;
     this.callbacks.onTimeUpdate?.(this.currentPosSecs, this.durationSecs);
     RemoteLogger.info('AVPLAY', `Abandoned stuck seek (${reason}), truth=${this.currentPosSecs.toFixed(1)}s`);

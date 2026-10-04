@@ -119,6 +119,9 @@ export class VideoPlayer {
         clearTimeout(this.seekCalmTimer);
         this.seekCalmTimer = setTimeout(() => {
           this.isSeekingActive = false;
+          // Перемотка завершена — фиксируем ТОЧКУ НАЗНАЧЕНИЯ сразу
+          // (timeupdate может отставать; таргет знаем точно).
+          this.saveProgressNow(target);
         }, 600);
       }
     }, 650);
@@ -132,7 +135,23 @@ export class VideoPlayer {
 
   private localPause() {
     avplayService.pause();
+    // Пауза — это остановка: фиксируем точку СРАЗУ (не ждём 15с-интервал
+    // и не полагаемся на close — иначе resume отстаёт от места паузы).
+    this.saveProgressNow();
     try { this.sync?.sendPause(); } catch {}
+  }
+
+  // Точное сохранение прогресса. explicitPos — когда точка известна заранее
+  // (таргет seek), иначе берём текущую правду сервиса. Порог 2с (было 5с),
+  // чтобы короткие остановки тоже запоминались точь-в-точь.
+  private saveProgressNow(explicitPos?: number) {
+    try {
+      const targetId = this.episode?.id || this.media.effectiveId || this.media.id;
+      const pos = explicitPos !== undefined ? explicitPos : this.currentTime;
+      if (targetId && pos > 2 && this.duration > 0) {
+        SkyCineApi.updateProgress(targetId, pos, this.duration).catch(() => {});
+      }
+    } catch {}
   }
 
   private localToggle() {
@@ -193,7 +212,7 @@ export class VideoPlayer {
         return true;
       }
 
-      // 3. OK / Enter Key
+      // 3. OK / Enter Key (середина пульта)
       if (keyCode === TIZEN_KEYS.KEY_ENTER) {
         RemoteLogger.info('REMOTE', 'KEY_ENTER pressed in VideoPlayer');
         const current = focusManager.getCurrentFocusedElement();
@@ -202,8 +221,11 @@ export class VideoPlayer {
         if (focusId === 'player-back-btn' || focusId === 'player-aspect-btn' || focusId === 'player-audio-btn' || focusId === 'player-next-btn' || focusId === 'player-rewind-btn' || focusId === 'player-forward-btn') {
           return false;
         }
-        // Everywhere else (play button, timeline, or watching full screen): Toggle Play/Pause!
-        this.localToggle();
+        // Середина везде иначе: открыть меню плеера (OSD) и встать на паузу.
+        // Продолжить — клавиши PLAY / PLAY-PAUSE либо кнопка «Воспроизведение».
+        this.setOSDVisible(true);
+        this.resetOSDTimer();
+        this.localPause();
         return true;
       }
 
@@ -328,10 +350,11 @@ export class VideoPlayer {
     const savedPos = this.episode
       ? (episodeProgress(this.episode) || mediaProgress(this.media))
       : mediaProgress(this.media);
+    // Порог 2с (был 5с): resume точь-в-точь с места остановки.
     const startPos = this.forceStartSecs !== null && this.forceStartSecs !== undefined
       ? Math.max(0, this.forceStartSecs)
       : savedPos;
-    const safeStart = startPos > 5 && (!this.duration || startPos < this.duration - 20) ? startPos : 0;
+    const safeStart = startPos > 2 && (!this.duration || startPos < this.duration - 20) ? startPos : 0;
 
     avplayService.setCallbacks({
       onTimeUpdate: (cur, dur) => {
@@ -390,7 +413,7 @@ export class VideoPlayer {
 
     // Save playback progress periodically
     this.progressInterval = setInterval(() => {
-      if (targetId && this.currentTime > 5 && this.duration > 0) {
+      if (targetId && this.currentTime > 2 && this.duration > 0) {
         SkyCineApi.updateProgress(targetId, this.currentTime, this.duration).catch(() => {});
       }
     }, 15000);
@@ -484,9 +507,10 @@ export class VideoPlayer {
   }
 
   public close() {
-    // Save final progress
+    // Save final progress (точная точка: пауза/seek уже сохранили своё,
+    // здесь — страховка текущим значением).
     const targetId = this.episode?.id || this.media.effectiveId || this.media.id;
-    if (targetId && this.currentTime > 5 && this.duration > 0) {
+    if (targetId && this.currentTime > 2 && this.duration > 0) {
       SkyCineApi.updateProgress(targetId, this.currentTime, this.duration).catch(() => {});
     }
 
